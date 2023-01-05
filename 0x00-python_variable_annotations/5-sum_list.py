@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sum list typed"""
+"""lets have sum list typed"""
 
 
 def sum_list(input_list: list[float]) -> float:
