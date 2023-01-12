@@ -8,5 +8,5 @@ from random import randrange
 
 def async_generator():
     """generate random shits"""
-    sleep(1)
     yield random() + randrange(1, 10)
+    sleep(1)
