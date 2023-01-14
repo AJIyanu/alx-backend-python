@@ -12,6 +12,15 @@ wait_random = __import__('0-basic_async_syntax').wait_random
 async def wait_n(n: int, max_delay: int) -> List[float]:
     """run dont wait"""
     colst: List[float] = []
-    task = asyncio.create_task(wait_random(max_delay))
-    await task
-    return task[result]
+    #task = wait_random(max_delay)
+    for i in range(n):
+        try:
+            task = asyncio.create_task(wait_random(max_delay))
+            print(f"started task {i}")
+            await task
+            colst.append(task)
+        except Exception:
+            print(f"couldn't start task {i}")
+        #colst.append(await task)
+    #await task
+    return colst
