@@ -11,7 +11,7 @@ wait_random = __import__('0-basic_async_syntax').wait_random
 
 async def wait_n(n: int, max_delay: int) -> List[float]:
     """run dont wait"""
-    #colst: List[float] = []
-    for p in range(n):
-        hji await wait_random(max_delay)
-    
+    task = []
+    for i in range(n):
+        task.append(wait_random(max_delay))
+    return sorted(await asyncio.gather(*task))
