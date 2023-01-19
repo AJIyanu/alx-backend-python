@@ -12,5 +12,5 @@ async def task_wait_n(n: int, max_delay: int) -> List[float]:
     """run dont wait"""
     task = []
     for i in range(n):
-        task.append(await task_wait_random(max_delay))
-    return sorted(await asyncio.gather(*task.result()))
+        task.append(task_wait_random(max_delay))
+    return sorted(await asyncio.gather(*task))
