@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """generator to yield random number"""
 
+import asyncio
+from random import randrange, random
 
-from time import sleep
-from random import randrange
 
-
-def async_generator():
+async def async_generator():
     """generate random shits"""
-    yield random() + randrange(0, 10)
-    sleep(1)
+    for i in range(10):
+        yield random() + randrange(0, 10)
+        await asyncio.sleep(1)
