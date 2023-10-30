@@ -3,7 +3,7 @@
 
 from utils import access_nested_map
 import unittest
-import parameterized
+from parameterized import parameterized
 from typing import Mapping, Sequence, Any
 
 
