@@ -29,3 +29,7 @@ class TestAccessNestedMap(unittest.TestCase):
         """tests that function raises assertion"""
         with self.assertRaises(KeyError):
             access_nested_map(nest, path)
+
+
+if __name__ == '__main__':
+    unittest.main()
