@@ -2,7 +2,7 @@
 """unit test for utils.access_nested_map"""
 
 from utils import access_nested_map
-import  unittest
+import unittest
 import parameterized
 
 
@@ -16,4 +16,5 @@ class TestAccessNestedMap(unittest.TestCase):
         ])
     def test_access_nested_map(self, nested_map, path, result):
         """tests that a nested map returns right value"""
-        self.assertEqual(access_nested_map(nested_map=nested_map, path=path), result)
+        self.assertEqual(access_nested_map(nested_map=nested_map, path=path),
+                         result)
