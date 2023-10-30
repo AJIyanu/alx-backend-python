@@ -31,5 +31,12 @@ class TestAccessNestedMap(unittest.TestCase):
             access_nested_map(nest, path)
 
 
+class TestGetJson(unittest.TestCase):
+    """class test getjson function"""
+
+    def test_get_json(self, url: str) -> str:
+        """test function returns json payload"""
+
+
 if __name__ == '__main__':
     unittest.main()
