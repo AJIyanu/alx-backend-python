@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Generic utilities for github org client.
 """
+import collections.abc
+
+collections.MutableMapping = collections.abc.MutableMapping
+collections.Mapping = collections.abc.Mapping
+collections.Iterable = collections.abc.Iterable
+collections.MutableSet = collections.abc.MutableSet
+collections.Callable = collections.abc.Callable
 import requests
 from functools import wraps
 from typing import (

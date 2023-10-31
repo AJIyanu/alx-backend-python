@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 """unit test for utils.access_nested_map"""
 
-from utils import access_nested_map
+from utils import access_nested_map, get_json
 import unittest
+from unittest.mock import patch
 from parameterized import parameterized
-from typing import Mapping, Sequence, Any
+from typing import Mapping, Sequence, Any, Dict
+
+try:
+    import requests
+except ImportError:
+    import collections.abc
+    collections.MutableMapping = collections.abc.MutableMapping
+    collections.Mapping = collections.abc.Mapping
+    collections.Iterable = collections.abc.Iterable
+    collections.MutableSet = collections.abc.MutableSet
+    collections.Callable = collections.abc.Callable
+    import requests
 
 
 class TestAccessNestedMap(unittest.TestCase):
@@ -34,8 +46,17 @@ class TestAccessNestedMap(unittest.TestCase):
 class TestGetJson(unittest.TestCase):
     """class test getjson function"""
 
-    def test_get_json(self, url: str) -> str:
+    @parameterized.expand([
+            (("http://example.com"), ({"payload": True})),
+            (("http://holberton.io"), ({"payload": False}))
+        ])
+    def test_get_json(self, url: str, tpayload: Dict) -> None:
         """test function returns json payload"""
+        with patch.object(requests, "get") as check:
+            check.return_value.json.return_value = tpayload
+            result = get_json(url)
+            check.assert_called_once()
+            self.assertEqual(result, tpayload)
 
 
 if __name__ == '__main__':
