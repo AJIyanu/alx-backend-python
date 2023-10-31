@@ -65,16 +65,19 @@ class TestMemoize(unittest.TestCase):
     def test_memoize(self) -> None:
         """ calls a function twice but method called once """
         class TestClass:
-            
+            """ This is a test class """
+
             def a_method(self):
+                """ retuns 42 for test """
                 return 42
 
             @memoize
             def a_property(self):
+                """ returns a method for test"""
                 return self.a_method()
 
         with patch.object(TestClass, "a_method",
-                return_value=MagicMock(return_value=42)) as check:
+                          return_value=MagicMock(return_value=42)) as check:
             test = TestClass()
             self.assertEqual(test.a_property(), 42)
             self.assertEqual(test.a_property(), 42)
