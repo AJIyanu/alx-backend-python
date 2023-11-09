@@ -23,8 +23,8 @@ class TestGithubOrgClient(unittest.TestCase):
         """test that GithubOrgClient.org returns correct output
            but never calls a real request
         """
-        with patch.object(requests, "get") as check:
-            check.return_value.json.return_value = jsonres
+        with patch.object(get_json) as check:
+            check.return_value = jsonres
             result = GithubOrgClient(orgname).org()
             check.assert_called_once()
             self.assertEqual(result, jsonres)
