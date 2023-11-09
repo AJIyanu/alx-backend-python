@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """unit test for client module"""
 
-from utils import access_nested_map, get_json, memoize
+import utils
 from client import GithubOrgClient
 import unittest
 from unittest.mock import patch, MagicMock
@@ -23,9 +23,9 @@ class TestGithubOrgClient(unittest.TestCase):
         """test that GithubOrgClient.org returns correct output
            but never calls a real request
         """
-        with patch.object(get_json) as check:
-            check.return_value = jsonres
-            result = GithubOrgClient(orgname).org()
+        with patch.object(utils, "get_json", return_value=MagicMock()) as check:
+            result = GithubOrgClient(orgname)
+            result = result.org()
             check.assert_called_once()
             self.assertEqual(result, jsonres)
 
