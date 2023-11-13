@@ -23,10 +23,9 @@ class TestGithubOrgClient(unittest.TestCase):
         """test that GithubOrgClient.org returns correct output
            but never calls a real request
         """
-        with patch.object(utils, "get_json", return_value=34) as check:
+        with patch.object(utils, "get_json", return_value=MagicMock()) as check:
             result = GithubOrgClient(orgname)
-            result = result.org
-            print(result)
+            print(f"testing string {orgname}, result {jsonres}")
             check.assert_called_once()
             self.assertEqual(result, jsonres)
 
