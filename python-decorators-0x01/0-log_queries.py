@@ -7,7 +7,6 @@ from datetime import datetime
 def log_queries(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        # Try to find the SQL query from either args or kwargs
         query = kwargs.get('query') if 'query' in kwargs else args[0] if args else None
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

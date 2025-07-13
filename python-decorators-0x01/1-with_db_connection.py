@@ -6,7 +6,6 @@ def with_db_connection(func):
     def wrapper(*args, **kwargs):
         conn = sqlite3.connect("users.db")
         try:
-            # Call the original function with the connection as the first argument
             return func(conn, *args, **kwargs)
         finally:
             conn.close()
