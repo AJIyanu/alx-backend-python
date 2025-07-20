@@ -16,7 +16,22 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from ..chats.views import ConversationViewSet, MessageViewSet
 
+# Create a router instance
+router = DefaultRouter()
+
+# Register your ViewSets with the router
+router.register(r'conversations', ConversationViewSet)
+router.register(r'messages', MessageViewSet)
+
+# The API URLs are now determined automatically by the router.
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('', include(router.urls)),
 ]
+
+# urlpatterns = [
+#     path('admin/', admin.site.urls),
+# ]
