@@ -1,4 +1,3 @@
-from django.shortcuts import render
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -62,3 +61,5 @@ class MessageViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         self.perform_destroy(instance)
         return Response({"detail": "Message deleted."}, status=status.HTTP_204_NO_CONTENT)
+    
+    # filters
