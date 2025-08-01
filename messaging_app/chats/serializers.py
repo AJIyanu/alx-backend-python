@@ -1,8 +1,11 @@
 from rest_framework import serializers
-from .models import User, Conversation, Message # Assuming your models are in users/models.py
+from .models import User, Conversation, Message
 
 # --- User Serializer ---
 class UserSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+    phone_number = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
     class Meta:
         model = User
         fields = [
@@ -10,11 +13,21 @@ class UserSerializer(serializers.ModelSerializer):
             'email',
             'first_name',
             'last_name',
+            'full_name',
             'phone_number',
             'role',
             'created_at',
         ]
         read_only_fields = ['user_id', 'created_at']
+
+    def get_full_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}"
+
+    def validate_role(self, value):
+        allowed_roles = ['guest', 'host', 'admin']
+        if value not in allowed_roles:
+            raise serializers.ValidationError("Invalid role specified.")
+        return value
 
 
 # --- Message Serializer ---
@@ -36,7 +49,6 @@ class MessageSerializer(serializers.ModelSerializer):
  
 
 
-# --- Conversation Serializer (Nested) ---
 class ConversationSerializer(serializers.ModelSerializer):
  
     participants = UserSerializer(many=True, read_only=True)
@@ -47,8 +59,8 @@ class ConversationSerializer(serializers.ModelSerializer):
         model = Conversation
         fields = [
             'conversation_id',
-            'participants',  # This will be the nested list of User objects
-            'messages',      # This will be the nested list of Message objects
+            'participants',
+            'messages', 
             'created_at'
         ]
         read_only_fields = ['conversation_id', 'created_at']

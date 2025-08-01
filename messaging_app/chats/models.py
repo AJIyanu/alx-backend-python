@@ -10,7 +10,7 @@ class User(AbstractUser):
         primary_key=True,
         default=uuid.uuid4,
         editable=False,
-        unique=True, # Ensure uniqueness
+        unique=True,
         verbose_name=_("User ID")
     )
 
@@ -29,7 +29,7 @@ class User(AbstractUser):
     role = models.CharField(
         max_length=10,
         choices=ROLE_CHOICES,
-        default='guest', # Default role
+        default='guest',
         blank=False,
         verbose_name=_("Role")
     )
@@ -38,7 +38,7 @@ class User(AbstractUser):
 
 
     USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['first_name', 'last_name', 'role'] # Fields prompted when creating a superuser
+    REQUIRED_FIELDS = ['first_name', 'last_name', 'role']
 
     def __str__(self):
         return self.email
@@ -46,7 +46,7 @@ class User(AbstractUser):
     class Meta:
         verbose_name = _("user")
         verbose_name_plural = _("users")
-        ordering = ['-created_at'] 
+        ordering = ['-created_at']
 
 
 class Conversation(models.Model):
@@ -67,8 +67,7 @@ class Conversation(models.Model):
         participant_emails = ", ".join([user.email for user in self.participants.all()])
         return f"Conversation {self.conversation_id} with: {participant_emails}"
     
-# users/models.py (continued)
-# Or in a new app like `conversation/models.py`
+
 
 class Message(models.Model):
     message_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
