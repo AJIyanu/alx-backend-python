@@ -160,8 +160,8 @@ REST_FRAMEWORK = {
     ],
 
     # Pagination settings (example: if you want default pagination)
-    # 'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    # 'PAGE_SIZE': 10,
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
 
     # Throttling settings (example)
     # 'DEFAULT_THROTTLE_CLASSES': [
