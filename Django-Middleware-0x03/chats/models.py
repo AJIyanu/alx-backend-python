@@ -55,7 +55,7 @@ class Conversation(models.Model):
     conversation_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     participants = models.ManyToManyField(
         User,
-        related_name='conversations', # Allows `user.conversations.all()`
+        related_name='conversations',
         verbose_name=_("Participants")
     )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("Created At"))
@@ -63,7 +63,7 @@ class Conversation(models.Model):
     class Meta:
         verbose_name = _("Conversation")
         verbose_name_plural = _("Conversations")
-        ordering = ['-created_at'] # Order by most recent conversation
+        ordering = ['-created_at']
 
     def __str__(self):
         participant_emails = ", ".join([user.email for user in self.participants.all()])
