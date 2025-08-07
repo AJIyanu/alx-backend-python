@@ -33,7 +33,7 @@ class RestrictAccessByTimeMiddleware:
     def __call__(self, request):
         if request.path.startswith('/api/conversations/') or request.path.startswith('/api/messages/'):
             now = datetime.now().time()
-            now = time(20, 0)  # simulate 11 PM
+            # now = time(20, 0)  # simulate 11 PM
             allowed_start = time(6, 0)
             allowed_end = time(21, 0)
 
