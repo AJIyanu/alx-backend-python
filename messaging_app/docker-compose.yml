@@ -1,0 +1,91 @@
+# Docker Compose file version - specifies which Docker Compose features are available
+# Version 3.8 is widely supported and has all the features we need
+version: "3.8"
+
+# Define the services (containers) that make up your application
+services:
+  # Database service - runs MySQL container
+  db:
+    # Use official MySQL 8.0 image from Docker Hub
+    # This image comes pre-configured with MySQL server
+    image: mysql:8.0
+
+    # Container name - makes it easier to reference and manage
+    # Without this, Docker generates a random name
+    container_name: messaging_app_db
+
+    # Restart policy - automatically restart if container stops/crashes
+    # "unless-stopped" means restart always, except when manually stopped
+    restart: unless-stopped
+
+    # Load environment variables from .env file for database configuration
+    # This keeps credentials secure and out of version control
+    env_file:
+      - .env
+
+    # Volume mapping - persist database data even if container is deleted
+    # Maps container's MySQL data directory to a named volume on host
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    # Port mapping - expose MySQL port to host machine
+    # Format: "host_port:container_port"
+    # This allows external tools (like MySQL Workbench) to connect
+    ports:
+      - "3306:3306"
+
+    # Health check - verify MySQL is ready to accept connections
+    # This prevents Django from trying to connect before MySQL is ready
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # Django web application service
+  web:
+    # Build image from Dockerfile in current directory
+    # This uses the Dockerfile we created earlier
+    build: .
+
+    # Container name for easier management
+    container_name: messaging_app_web
+
+    # Restart policy - same as database
+    restart: unless-stopped
+
+    # Port mapping - expose Django development server
+    # Maps host port 8000 to container port 8000
+    # Access your app at http://localhost:8000
+    ports:
+      - "8000:8000"
+
+    # Load environment variables from .env file
+    # This keeps sensitive data out of version control
+    env_file:
+      - .env
+
+    # Service dependencies - ensure database starts before web app
+    # Docker Compose will start 'db' service first
+    depends_on:
+      db:
+        # Wait for database health check to pass before starting web service
+        # This ensures MySQL is fully ready before Django tries to connect
+        condition: service_healthy
+
+    # Volume mapping - mount your code directory for development
+    # This allows you to edit code without rebuilding the Docker image
+    # Maps current directory on host to /app in container
+    volumes:
+      - .:/app
+
+    # Keep container running and show logs
+    # stdin_open and tty allow interactive debugging if needed
+    stdin_open: true
+    tty: true
+
+# Named volumes - Docker manages these storage areas
+# Data persists even if containers are deleted and recreated
+volumes:
+  # Volume for MySQL data persistence
+  # Without this, database data would be lost when container stops
+  mysql_data:
