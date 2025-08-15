@@ -48,18 +48,20 @@ services:
     # Build image from Dockerfile in current directory
     # This uses the Dockerfile we created earlier
     build: .
+    command: >
+      sh -c "python3 manage.py makemigrations &&
+             python3 manage.py migrate &&
+             python3 manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
 
     # Container name for easier management
     container_name: messaging_app_web
 
     # Restart policy - same as database
     restart: unless-stopped
-
-    # Port mapping - expose Django development server
-    # Maps host port 8000 to container port 8000
-    # Access your app at http://localhost:8000
-    ports:
-      - "8000:8000"
 
     # Load environment variables from .env file
     # This keeps sensitive data out of version control
@@ -73,12 +75,6 @@ services:
         # Wait for database health check to pass before starting web service
         # This ensures MySQL is fully ready before Django tries to connect
         condition: service_healthy
-
-    # Volume mapping - mount your code directory for development
-    # This allows you to edit code without rebuilding the Docker image
-    # Maps current directory on host to /app in container
-    volumes:
-      - .:/app
 
     # Keep container running and show logs
     # stdin_open and tty allow interactive debugging if needed
