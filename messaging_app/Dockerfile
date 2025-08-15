@@ -90,20 +90,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000')" || exit 1
 
-# Run the Django development server
-# This is the command that runs when the container starts
-# It's like typing "python manage.py runserver 0.0.0.0:8000" in terminal
-# 0.0.0.0:8000 means "listen on all network interfaces on port 8000"
-# (127.0.0.1 would only work inside container, 0.0.0.0 allows external access)
-RUN echo '#!/bin/bash\n\
-echo "Making migrations..."\n\
-python manage.py makemigrations\n\
-echo "Running migrations..."\n\
-python manage.py migrate\n\
-echo "Starting Django server..."\n\
-python manage.py runserver 0.0.0.0:8000' > /app/start.sh \
-    && chmod +x /app/start.sh
+# Run migrations as part of the image build process
+# This is a good practice for production images
+RUN python3 manage.py makemigrations && \
+    python3 manage.py migrate
 
-# Run the startup script when container starts
-# This ensures migrations run before the server starts
-CMD ["/app/start.sh"]
+# Now, the CMD simply runs the server, as migrations are already handled
+CMD ["python3", "manage.py", "runserver"]

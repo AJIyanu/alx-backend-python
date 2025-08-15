@@ -19,9 +19,11 @@ services:
     restart: unless-stopped
 
     # Load environment variables from .env file for database configuration
-    # This keeps credentials secure and out of version control
-    env_file:
-      - .env
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
 
     # Volume mapping - persist database data even if container is deleted
     # Maps container's MySQL data directory to a named volume on host
