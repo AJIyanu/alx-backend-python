@@ -1,0 +1,93 @@
+#!/bin/bash
+
+# kurbeScript - Start Kubernetes cluster and verify it's running
+# Author: Generated for Kubernetes cluster management
+
+echo "=========================================="
+echo "🚀 Starting Kubernetes Cluster Setup"
+echo "=========================================="
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Check if minikube is installed
+if ! command_exists minikube; then
+    echo "❌ Error: minikube is not installed"
+    echo "Please install minikube first: https://minikube.sigs.k8s.io/docs/start/"
+    exit 1
+fi
+
+# Check if kubectl is installed
+if ! command_exists kubectl; then
+    echo "❌ Error: kubectl is not installed"
+    echo "Please install kubectl first"
+    exit 1
+fi
+
+echo "✅ Prerequisites check passed"
+echo ""
+
+# Start Kubernetes cluster
+echo "🔄 Starting Kubernetes cluster..."
+echo "This may take a few minutes on first run..."
+
+# Using the configuration that worked for you
+minikube start --driver=none
+
+# Check if minikube started successfully
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to start minikube cluster"
+    exit 1
+fi
+
+echo ""
+echo "✅ Kubernetes cluster started successfully!"
+echo ""
+
+# Wait a moment for cluster to be fully ready
+echo "⏳ Waiting for cluster to be fully ready..."
+sleep 5
+
+# Verify cluster is running using kubectl cluster-info
+echo "=========================================="
+echo "🔍 Verifying cluster status..."
+echo "=========================================="
+
+kubectl cluster-info
+
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to get cluster info"
+    exit 1
+fi
+
+echo ""
+echo "✅ Cluster verification completed!"
+echo ""
+
+# Retrieve available pods
+echo "=========================================="
+echo "📦 Retrieving available pods..."
+echo "=========================================="
+
+echo "Pods in default namespace:"
+kubectl get pods
+
+echo ""
+echo "Pods in all namespaces:"
+kubectl get pods --all-namespaces
+
+echo ""
+echo "=========================================="
+echo "🎉 Script completed successfully!"
+echo "=========================================="
+echo ""
+echo "Your Kubernetes cluster is now running and ready to use!"
+echo ""
+echo "Useful commands:"
+echo "  • Check cluster status: minikube status"
+echo "  • Stop cluster: minikube stop"
+echo "  • Delete cluster: minikube delete"
+echo "  • Access dashboard: minikube dashboard"
+echo ""
