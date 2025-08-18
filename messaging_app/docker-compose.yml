@@ -10,6 +10,9 @@ services:
     # This image comes pre-configured with MySQL server
     image: mysql:8.0
 
+    env_file:
+      - .env
+
     # Container name - makes it easier to reference and manage
     # Without this, Docker generates a random name
     container_name: messaging_app_db
@@ -21,10 +24,10 @@ services:
     # Load environment variables from .env file for database configuration
     environment:
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-      - MYSQL_DATABASE=${MYSQL_DATABASE}
       - MYSQL_USER=${MYSQL_USER}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_DB=${MYSQL_DB}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
 
     # Volume mapping - persist database data even if container is deleted
     # Maps container's MySQL data directory to a named volume on host
@@ -49,6 +52,15 @@ services:
     # Build image from Dockerfile in current directory
     # This uses the Dockerfile we created earlier
     build: .
+    env_file:
+      - .env
+    environment:
+      - DEBUG=${DEBUG}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
     command: >
       sh -c "python3 manage.py makemigrations &&
              python3 manage.py migrate &&
@@ -63,11 +75,6 @@ services:
 
     # Restart policy - same as database
     restart: unless-stopped
-
-    # Load environment variables from .env file
-    # This keeps sensitive data out of version control
-    env_file:
-      - .env
 
     # Service dependencies - ensure database starts before web app
     # Docker Compose will start 'db' service first

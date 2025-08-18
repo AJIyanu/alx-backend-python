@@ -3,6 +3,7 @@
 # "slim" version is smaller - has Python but fewer extra packages
 FROM python:3.10-slim
 
+
 # Set environment variables
 # These control how Python behaves inside the container:
 # PYTHONDONTWRITEBYTECODE=1: Prevents Python from writing .pyc files (compiled bytecode)
@@ -25,11 +26,9 @@ WORKDIR /app
 #   - libpq-dev: Development files needed to build PostgreSQL-related Python packages
 # --no-install-recommends: Only install essential packages, not suggested ones
 # rm -rf /var/lib/apt/lists/*: Clean up package cache to reduce image size
+# Install system dependencies for mysqlclient
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        gcc \
-        postgresql-client \
-        libpq-dev \
+    && apt-get install -y gcc default-libmysqlclient-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file first (for better Docker layer caching)
@@ -92,8 +91,8 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
 
 # Run migrations as part of the image build process
 # This is a good practice for production images
-RUN python3 manage.py makemigrations && \
-    python3 manage.py migrate
+# RUN python3 manage.py makemigrations && \
+#     python3 manage.py migrate
 
 # Now, the CMD simply runs the server, as migrations are already handled
 CMD ["python3", "manage.py", "runserver"]
