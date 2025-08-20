@@ -1,0 +1,133 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: django-messaging-ingress
+  labels:
+    app: django-messaging
+  annotations:
+    # Use nginx ingress controller
+    kubernetes.io/ingress.class: "nginx"
+    # Enable rewrite-target for path-based routing
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    # Configure CORS if needed for API access
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization"
+    # SSL redirect (disable for local testing)
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # Connection and timeout settings
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+spec:
+  # TLS configuration (optional - uncomment if you have certificates)
+  # tls:
+  # - hosts:
+  #   - messaging-app.local
+  #   - api.messaging-app.local
+  #   secretName: messaging-app-tls
+
+  rules:
+    # Rule 1: Main domain for the Django admin and web interface
+    - host: messaging-app.local
+      http:
+        paths:
+          # Django admin interface
+          - path: /admin(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: django-messaging-service
+                port:
+                  number: 8000
+
+          # Django main application
+          - path: /()(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: django-messaging-service
+                port:
+                  number: 8000
+
+    # Rule 2: API subdomain for Django REST API
+    - host: api.messaging-app.local
+      http:
+        paths:
+          # API endpoints
+          - path: /()(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: django-messaging-service
+                port:
+                  number: 8000
+
+    # Rule 3: Path-based routing (alternative to subdomain)
+    - host: localhost
+      http:
+        paths:
+          # API path routing
+          - path: /api(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: django-messaging-service
+                port:
+                  number: 8000
+
+          # Admin interface
+          - path: /admin(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: django-messaging-service
+                port:
+                  number: 8000
+
+          # Static files
+          - path: /static(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: django-messaging-service
+                port:
+                  number: 8000
+
+          # Main application (catch-all)
+          - path: /()(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: django-messaging-service
+                port:
+                  number: 8000
+
+---
+# Optional: Create a NodePort service for the Ingress Controller
+# (useful for bare metal/local testing)
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-nginx-controller-nodeport
+  namespace: ingress-nginx
+  labels:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/part-of: ingress-nginx
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
+      nodePort: 30080
+    - name: https
+      port: 443
+      targetPort: 443
+      protocol: TCP
+      nodePort: 30443
+  selector:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/instance: ingress-nginx
+    app.kubernetes.io/component: controller
