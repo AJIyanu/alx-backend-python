@@ -1,0 +1,243 @@
+#!/bin/bash
+
+# kubctl-0x02 - Blue-Green Deployment Management Script
+# Author: Generated for Blue-Green deployment strategy
+
+set -e  # Exit on any error
+
+echo "=============================================="
+echo "🔄 Blue-Green Deployment Management Script"
+echo "=============================================="
+
+# Configuration
+BLUE_DEPLOYMENT="django-messaging-blue"
+GREEN_DEPLOYMENT="django-messaging-green"
+PRODUCTION_SERVICE="django-messaging-service"
+GREEN_SERVICE="django-messaging-green-service"
+NAMESPACE="default"
+
+# Function to print colored output
+print_success() {
+    echo -e "\033[32m✅ $1\033[0m"
+}
+
+print_info() {
+    echo -e "\033[34mℹ️  $1\033[0m"
+}
+
+print_warning() {
+    echo -e "\033[33m⚠️  $1\033[0m"
+}
+
+print_error() {
+    echo -e "\033[31m❌ $1\033[0m"
+}
+
+print_header() {
+    echo ""
+    echo "=============================================="
+    echo "🎯 $1"
+    echo "=============================================="
+}
+
+# Function to check deployment status
+check_deployment_status() {
+    local deployment=$1
+    local max_attempts=30
+    local attempt=1
+    
+    print_info "Checking status of deployment: $deployment"
+    
+    while [ $attempt -le $max_attempts ]; do
+        if kubectl rollout status deployment/$deployment --timeout=10s &>/dev/null; then
+            print_success "Deployment $deployment is ready!"
+            return 0
+        fi
+        
+        print_info "Attempt $attempt/$max_attempts - Deployment $deployment not ready yet..."
+        sleep 10
+        ((attempt++))
+    done
+    
+    print_error "Deployment $deployment failed to become ready within timeout"
+    return 1
+}
+
+# Function to get pod logs
+check_deployment_logs() {
+    local deployment=$1
+    local lines=${2:-50}
+    
+    print_info "Checking logs for deployment: $deployment (last $lines lines)"
+    echo "----------------------------------------"
+    
+    # Get pod names for the deployment
+    pods=$(kubectl get pods -l app=django-messaging,version=${deployment##*-} --no-headers -o custom-columns=":metadata.name" 2>/dev/null || echo "")
+    
+    if [ -z "$pods" ]; then
+        print_warning "No pods found for deployment $deployment"
+        return 1
+    fi
+    
+    for pod in $pods; do
+        echo ""
+        print_info "Logs from pod: $pod"
+        echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        kubectl logs "$pod" --tail=$lines --timestamps=true || {
+            print_warning "Could not retrieve logs from pod $pod"
+        }
+        echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+    done
+}
+
+# Function to test endpoint
+test_endpoint() {
+    local service=$1
+    local path=${2:-"/version/"}
+    local expected_version=${3:-""}
+    
+    print_info "Testing endpoint: $service$path"
+    
+    # Port forward to test the service
+    kubectl port-forward service/$service 8080:8000 > /dev/null 2>&1 &
+    local pf_pid=$!
+    sleep 3
+    
+    # Test the endpoint
+    local response=$(curl -s "http://localhost:8080$path" 2>/dev/null || echo "")
+    
+    # Clean up port forward
+    kill $pf_pid 2>/dev/null || true
+    
+    if [ -n "$response" ]; then
+        print_success "Endpoint response: $response"
+        
+        if [ -n "$expected_version" ] && echo "$response" | grep -q "$expected_version"; then
+            print_success "Found expected version: $expected_version"
+            return 0
+        elif [ -z "$expected_version" ]; then
+            return 0
+        else
+            print_warning "Expected version '$expected_version' not found in response"
+            return 1
+        fi
+    else
+        print_error "No response from endpoint"
+        return 1
+    fi
+}
+
+# Function to switch traffic
+switch_traffic() {
+    local target_version=$1
+    
+    print_info "Switching production traffic to: $target_version"
+    
+    # Update the production service selector
+    kubectl patch service $PRODUCTION_SERVICE -p '{"spec":{"selector":{"app":"django-messaging","version":"'$target_version'"}}}'
+    
+    if [ $? -eq 0 ]; then
+        print_success "Traffic switched to $target_version version"
+        return 0
+    else
+        print_error "Failed to switch traffic to $target_version"
+        return 1
+    fi
+}
+
+# Main deployment function
+deploy_version() {
+    local version=$1
+    local deployment_file=$2
+    
+    print_header "DEPLOYING $version VERSION"
+    
+    print_info "Applying deployment configuration: $deployment_file"
+    kubectl apply -f $deployment_file
+    
+    if [ $? -eq 0 ]; then
+        print_success "Deployment configuration applied successfully"
+    else
+        print_error "Failed to apply deployment configuration"
+        return 1
+    fi
+    
+    # Wait for deployment to be ready
+    local deployment_name
+    if [ "$version" = "BLUE" ]; then
+        deployment_name=$BLUE_DEPLOYMENT
+    else
+        deployment_name=$GREEN_DEPLOYMENT
+    fi
+    
+    check_deployment_status $deployment_name
+    
+    # Check logs for any errors
+    print_info "Checking deployment logs for errors..."
+    check_deployment_logs $deployment_name 30
+    
+    # Test the deployment
+    local service_name
+    if [ "$version" = "BLUE" ]; then
+        service_name=$PRODUCTION_SERVICE
+    else
+        service_name=$GREEN_SERVICE
+    fi
+    
+    sleep 5  # Give a moment for services to update
+    test_endpoint $service_name "/version/" "v"
+}
+
+# Show current deployment status
+show_status() {
+    print_header "CURRENT DEPLOYMENT STATUS"
+    
+    echo "Deployments:"
+    echo "============"
+    kubectl get deployments -l app=django-messaging -o wide
+    
+    echo ""
+    echo "Pods:"
+    echo "====="
+    kubectl get pods -l app=django-messaging -o wide
+    
+    echo ""
+    echo "Services:"
+    echo "========="
+    kubectl get services -l app=django-messaging -o wide
+    
+    echo ""
+    echo "Current Production Traffic Target:"
+    echo "=================================="
+    kubectl get service $PRODUCTION_SERVICE -o jsonpath='{.spec.selector}' | jq '.' 2>/dev/null || \
+        kubectl get service $PRODUCTION_SERVICE -o yaml | grep -A 5 selector:
+}
+
+# Main script logic
+main() {
+    case "${1:-help}" in
+        "deploy-blue")
+            print_info "Starting Blue deployment..."
+            deploy_version "BLUE" "blue_deployment.yaml"
+            ;;
+        
+        "deploy-green")
+            print_info "Starting Green deployment..."
+            deploy_version "GREEN" "green_deployment.yaml"
+            ;;
+        
+        "deploy-both")
+            print_info "Deploying both Blue and Green versions..."
+            
+            # Apply services first
+            print_info "Applying service configurations..."
+            kubectl apply -f kubeservice.yaml
+            
+            # Deploy Blue version
+            deploy_version "BLUE" "blue_deployment.yaml"
+            
+            echo ""
+            # Deploy Green version
+            deploy_version "GREEN" "green_deployment.yaml"
+            
+            print
