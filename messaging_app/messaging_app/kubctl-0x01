@@ -1,0 +1,270 @@
+#!/bin/bash
+
+# kubctl-0x01 - Scale Django app, verify replicas, perform load testing, and monitor resources
+# Author: Generated for Kubernetes scaling and monitoring
+
+set -e  # Exit on any error
+
+echo "=============================================="
+echo "🚀 Kubernetes Scaling and Load Testing Script"
+echo "=============================================="
+
+# Configuration
+DEPLOYMENT_NAME="django-messaging-app"
+SERVICE_NAME="django-messaging-service"
+TARGET_REPLICAS=3
+LOAD_TEST_DURATION="30s"
+LOAD_TEST_CONNECTIONS=10
+LOAD_TEST_THREADS=2
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to print colored output
+print_success() {
+    echo -e "\033[32m✅ $1\033[0m"
+}
+
+print_info() {
+    echo -e "\033[34mℹ️  $1\033[0m"
+}
+
+print_warning() {
+    echo -e "\033[33m⚠️  $1\033[0m"
+}
+
+print_error() {
+    echo -e "\033[31m❌ $1\033[0m"
+}
+
+# Check prerequisites
+echo "🔍 Checking prerequisites..."
+
+if ! command_exists kubectl; then
+    print_error "kubectl is not installed"
+    exit 1
+fi
+
+if ! command_exists wrk; then
+    print_warning "wrk is not installed. Installing wrk..."
+    if command_exists apt-get; then
+        sudo apt-get update && sudo apt-get install -y wrk
+    elif command_exists yum; then
+        sudo yum install -y wrk
+    else
+        print_error "Cannot install wrk. Please install it manually"
+        print_info "Install wrk: https://github.com/wg/wrk"
+        exit 1
+    fi
+fi
+
+print_success "Prerequisites check completed"
+echo ""
+
+# Step 1: Scale the Django deployment to 3 replicas
+echo "=============================================="
+echo "📈 STEP 1: Scaling Django Deployment"
+echo "=============================================="
+
+print_info "Scaling deployment '$DEPLOYMENT_NAME' to $TARGET_REPLICAS replicas..."
+
+kubectl scale deployment $DEPLOYMENT_NAME --replicas=$TARGET_REPLICAS
+
+if [ $? -eq 0 ]; then
+    print_success "Deployment scaling command executed successfully"
+else
+    print_error "Failed to scale deployment"
+    exit 1
+fi
+
+echo ""
+print_info "Waiting for deployment to be ready..."
+
+# Wait for rollout to complete
+kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=300s
+
+if [ $? -eq 0 ]; then
+    print_success "Deployment rollout completed successfully"
+else
+    print_error "Deployment rollout failed or timed out"
+    exit 1
+fi
+
+echo ""
+
+# Step 2: Verify multiple pods are running
+echo "=============================================="
+echo "🔍 STEP 2: Verifying Pod Status"
+echo "=============================================="
+
+print_info "Checking current pod status..."
+echo ""
+
+kubectl get pods -l app=django-messaging -o wide
+
+echo ""
+print_info "Deployment details:"
+kubectl get deployment $DEPLOYMENT_NAME
+
+# Count running pods
+RUNNING_PODS=$(kubectl get pods -l app=django-messaging --field-selector=status.phase=Running --no-headers | wc -l)
+
+echo ""
+if [ "$RUNNING_PODS" -eq "$TARGET_REPLICAS" ]; then
+    print_success "$RUNNING_PODS out of $TARGET_REPLICAS pods are running successfully"
+else
+    print_warning "$RUNNING_PODS out of $TARGET_REPLICAS pods are running"
+    print_info "Waiting a bit more for pods to be ready..."
+    sleep 10
+    RUNNING_PODS=$(kubectl get pods -l app=django-messaging --field-selector=status.phase=Running --no-headers | wc -l)
+    if [ "$RUNNING_PODS" -eq "$TARGET_REPLICAS" ]; then
+        print_success "All $TARGET_REPLICAS pods are now running"
+    else
+        print_warning "Only $RUNNING_PODS pods are running. Continuing with load test..."
+    fi
+fi
+
+echo ""
+
+# Step 3: Perform load testing with wrk
+echo "=============================================="
+echo "🔥 STEP 3: Load Testing with wrk"
+echo "=============================================="
+
+print_info "Setting up port forwarding for load testing..."
+
+# Start port forwarding in background
+kubectl port-forward service/$SERVICE_NAME 8080:8000 > /dev/null 2>&1 &
+PORT_FORWARD_PID=$!
+
+# Wait for port forward to be ready
+sleep 3
+
+# Check if port forward is working
+if ! nc -z localhost 8080 2>/dev/null; then
+    print_error "Port forwarding failed. Trying alternative approach..."
+    kill $PORT_FORWARD_PID 2>/dev/null || true
+    
+    # Try direct service IP
+    SERVICE_IP=$(kubectl get service $SERVICE_NAME -o jsonpath='{.spec.clusterIP}')
+    SERVICE_PORT=$(kubectl get service $SERVICE_NAME -o jsonpath='{.spec.ports[0].port}')
+    
+    print_info "Using service IP: $SERVICE_IP:$SERVICE_PORT"
+    TARGET_URL="http://$SERVICE_IP:$SERVICE_PORT/"
+else
+    TARGET_URL="http://localhost:8080/"
+    print_success "Port forwarding established successfully"
+fi
+
+print_info "Starting load test..."
+print_info "Duration: $LOAD_TEST_DURATION"
+print_info "Connections: $LOAD_TEST_CONNECTIONS"
+print_info "Threads: $LOAD_TEST_THREADS"
+print_info "Target URL: $TARGET_URL"
+
+echo ""
+echo "📊 Load Test Results:"
+echo "===================="
+
+# Run load test
+wrk -t$LOAD_TEST_THREADS -c$LOAD_TEST_CONNECTIONS -d$LOAD_TEST_DURATION --timeout=10s $TARGET_URL
+
+LOAD_TEST_EXIT_CODE=$?
+
+# Clean up port forwarding
+if [ -n "$PORT_FORWARD_PID" ]; then
+    kill $PORT_FORWARD_PID 2>/dev/null || true
+fi
+
+if [ $LOAD_TEST_EXIT_CODE -eq 0 ]; then
+    print_success "Load test completed successfully"
+else
+    print_warning "Load test completed with some issues (this may be normal)"
+fi
+
+echo ""
+
+# Step 4: Monitor Resource Usage
+echo "=============================================="
+echo "📊 STEP 4: Monitoring Resource Usage"
+echo "=============================================="
+
+print_info "Checking if metrics server is available..."
+
+if kubectl get apiservice v1beta1.metrics.k8s.io &>/dev/null; then
+    print_success "Metrics server is available"
+    
+    print_info "Node resource usage:"
+    echo "===================="
+    kubectl top nodes 2>/dev/null || print_warning "Could not retrieve node metrics"
+    
+    echo ""
+    print_info "Pod resource usage for Django app:"
+    echo "================================="
+    kubectl top pods -l app=django-messaging 2>/dev/null || print_warning "Could not retrieve pod metrics"
+    
+    echo ""
+    print_info "All pod resource usage:"
+    echo "====================="
+    kubectl top pods --all-namespaces 2>/dev/null | head -20 || print_warning "Could not retrieve all pod metrics"
+    
+else
+    print_warning "Metrics server is not available"
+    print_info "Installing metrics server for resource monitoring..."
+    
+    kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+    
+    print_info "Waiting for metrics server to be ready..."
+    sleep 30
+    
+    if kubectl top nodes &>/dev/null; then
+        print_success "Metrics server is now working"
+        kubectl top pods -l app=django-messaging
+    else
+        print_warning "Metrics server still not ready. You can check resources manually with:"
+        echo "  kubectl top nodes"
+        echo "  kubectl top pods"
+    fi
+fi
+
+echo ""
+
+# Step 5: Final Status Summary
+echo "=============================================="
+echo "📋 FINAL STATUS SUMMARY"
+echo "=============================================="
+
+echo "Deployment Status:"
+echo "=================="
+kubectl get deployment $DEPLOYMENT_NAME
+
+echo ""
+echo "Pod Status:"
+echo "==========="
+kubectl get pods -l app=django-messaging
+
+echo ""
+echo "Service Status:"
+echo "==============="
+kubectl get service $SERVICE_NAME
+
+echo ""
+echo "Resource Requests/Limits:"
+echo "========================"
+kubectl describe deployment $DEPLOYMENT_NAME | grep -A 10 -B 2 -i "limits\|requests" || print_info "No resource limits/requests configured"
+
+echo ""
+print_success "Script completed successfully!"
+print_info "Your Django app is now scaled to $TARGET_REPLICAS replicas and has been load tested"
+
+echo ""
+echo "📚 Useful commands for monitoring:"
+echo "=================================="
+echo "  • Check pod status: kubectl get pods -l app=django-messaging"
+echo "  • View logs: kubectl logs deployment/$DEPLOYMENT_NAME -f"
+echo "  • Scale deployment: kubectl scale deployment $DEPLOYMENT_NAME --replicas=N"
+echo "  • Monitor resources: kubectl top pods -l app=django-messaging"
+echo "  • Port forward: kubectl port-forward service/$SERVICE_NAME 8080:8000"
+echo ""
