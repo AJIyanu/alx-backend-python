@@ -1,0 +1,470 @@
+name: 🐳 Docker Build & Deploy
+
+# Trigger the workflow on specific events
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    tags:
+      - "v*" # Trigger on version tags like v1.0.0
+  pull_request:
+    branches:
+      - main
+      - master
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: # Allow manual triggering
+    inputs:
+      force_push:
+        description: "Force push to Docker Hub regardless of branch"
+        required: false
+        default: "false"
+        type: boolean
+      custom_tag:
+        description: "Custom tag for the Docker image"
+        required: false
+        default: ""
+        type: string
+
+# Environment variables
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: your-dockerhub-username/messaging-app # Update with your Docker Hub username/repository
+  DOCKERFILE_PATH: ./Dockerfile
+  BUILD_CONTEXT: .
+
+jobs:
+  # Job 1: Build Docker Image
+  build:
+    name: 🏗️ Build Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tags: ${{ steps.meta.outputs.tags }}
+      image-labels: ${{ steps.meta.outputs.labels }}
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full git history for better Docker layer caching
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
+          platforms: linux/amd64,linux/arm64
+
+      - name: 🔍 Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            # Branch-based tags
+            type=ref,event=branch
+            type=ref,event=pr
+
+            # Tag-based tags
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+            # Default tags
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+            # Custom tag from workflow input
+            type=raw,value=${{ github.event.inputs.custom_tag }},enable=${{ github.event.inputs.custom_tag != '' }}
+
+            # SHA-based tag
+            type=sha,prefix={{branch}}-,suffix=-{{date 'YYYYMMDD'}},format=short
+
+          labels: |
+            org.opencontainers.image.title=Messaging App
+            org.opencontainers.image.description=Django-based messaging application
+            org.opencontainers.image.vendor=Your Company Name
+            org.opencontainers.image.authors=your-email@example.com
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/main/README.md
+            maintainer=your-email@example.com
+
+      - name: 📄 Create Dockerfile if not exists
+        run: |
+          if [ ! -f "${{ env.DOCKERFILE_PATH }}" ]; then
+            echo "📝 Creating production-ready Dockerfile..."
+            cat > Dockerfile << 'DOCKERFILE_EOF'
+          # Multi-stage build for optimized image size
+          FROM python:3.9-slim as base
+
+          # Set environment variables
+          ENV PYTHONUNBUFFERED=1 \
+              PYTHONDONTWRITEBYTECODE=1 \
+              PIP_NO_CACHE_DIR=1 \
+              PIP_DISABLE_PIP_VERSION_CHECK=1
+
+          # Install system dependencies
+          RUN apt-get update \
+              && apt-get install -y --no-install-recommends \
+                  build-essential \
+                  libmysqlclient-dev \
+                  pkg-config \
+                  default-libmysqlclient-dev \
+                  curl \
+                  netcat-traditional \
+              && rm -rf /var/lib/apt/lists/* \
+              && apt-get clean
+
+          # Create app user for security
+          RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+          # Set working directory
+          WORKDIR /app
+
+          # Copy requirements first for better caching
+          COPY requirements*.txt ./
+
+          # Install Python dependencies
+          RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+              && pip install --no-cache-dir -r requirements.txt \
+              && if [ -f "requirements-prod.txt" ]; then pip install --no-cache-dir -r requirements-prod.txt; fi
+
+          # Production stage
+          FROM base as production
+
+          # Copy application code
+          COPY . .
+
+          # Create necessary directories and set permissions
+          RUN mkdir -p /app/staticfiles /app/mediafiles /app/logs \
+              && chown -R appuser:appuser /app \
+              && chmod +x /app/entrypoint.sh 2>/dev/null || true
+
+          # Create entrypoint script if it doesn't exist
+          RUN if [ ! -f "/app/entrypoint.sh" ]; then \
+                cat > /app/entrypoint.sh << 'ENTRYPOINT_EOF'
+          #!/bin/bash
+          set -e
+
+          echo "🚀 Starting Django Messaging App..."
+
+          # Wait for database
+          if [ "$DATABASE_URL" ]; then
+            echo "⏳ Waiting for database..."
+            timeout 30 bash -c 'until nc -z $DB_HOST $DB_PORT; do sleep 1; done' || echo "Database connection timeout"
+          fi
+
+          # Run migrations
+          echo "🔄 Running database migrations..."
+          python manage.py migrate --noinput
+
+          # Collect static files
+          echo "📦 Collecting static files..."
+          python manage.py collectstatic --noinput --clear
+
+          # Start the application
+          echo "✅ Starting application server..."
+          exec "$@"
+          ENTRYPOINT_EOF
+                chmod +x /app/entrypoint.sh; \
+              fi
+
+          # Switch to non-root user
+          USER appuser
+
+          # Expose port
+          EXPOSE 8000
+
+          # Health check
+          HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+            CMD curl -f http://localhost:8000/health/ || exit 1
+
+          # Set entrypoint and default command
+          ENTRYPOINT ["/app/entrypoint.sh"]
+          CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--worker-class", "gevent", "--worker-connections", "1000", "--max-requests", "1000", "--max-requests-jitter", "100", "--timeout", "30", "--keep-alive", "5", "messaging_app.wsgi:application"]
+          DOCKERFILE_EOF
+          else
+            echo "✅ Using existing Dockerfile"
+          fi
+
+      - name: 🏗️ Build Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE_PATH }}
+          platforms: linux/amd64,linux/arm64
+          push: false # Don't push yet, just build
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+          outputs: type=docker,dest=/tmp/image.tar
+
+      - name: 📤 Upload image artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-image
+          path: /tmp/image.tar
+          retention-days: 1
+
+      - name: 🔍 Test Docker image
+        run: |
+          # Load the built image
+          docker load --input /tmp/image.tar
+
+          # Get the first tag for testing
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          echo "Testing image: $IMAGE_TAG"
+
+          # Run basic tests on the image
+          echo "🧪 Testing Docker image..."
+
+          # Test 1: Check if image can be instantiated
+          CONTAINER_ID=$(docker run -d --name test-container-${{ github.run_number }} \
+            -e DJANGO_SETTINGS_MODULE=messaging_app.settings.production \
+            -e SECRET_KEY=test-secret-key \
+            -e DEBUG=False \
+            -e ALLOWED_HOSTS=localhost \
+            "$IMAGE_TAG" || exit 1)
+
+          echo "Container started: $CONTAINER_ID"
+
+          # Wait for container to initialize
+          sleep 15
+
+          # Test 2: Check if container is running
+          if docker ps | grep -q "test-container-${{ github.run_number }}"; then
+            echo "✅ Container is running successfully"
+            
+            # Test 3: Check Python and Django installation
+            docker exec "test-container-${{ github.run_number }}" python --version
+            docker exec "test-container-${{ github.run_number }}" python -c "import django; print(f'Django version: {django.get_version()}')"
+            
+            # Test 4: Check if dependencies are installed
+            docker exec "test-container-${{ github.run_number }}" pip list | grep -E "(Django|gunicorn|mysqlclient)" || true
+            
+            # Test 5: Check file permissions and user
+            docker exec "test-container-${{ github.run_number }}" whoami
+            docker exec "test-container-${{ github.run_number }}" ls -la /app/
+            
+          else
+            echo "❌ Container failed to start"
+            docker logs "test-container-${{ github.run_number }}"
+            exit 1
+          fi
+
+          # Cleanup test container
+          docker stop "test-container-${{ github.run_number }}" || true
+          docker rm "test-container-${{ github.run_number }}" || true
+
+      - name: 🔒 Run security scan with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          input: /tmp/image.tar
+          format: "sarif"
+          output: "trivy-results.sarif"
+        continue-on-error: true
+
+      - name: 📊 Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+        continue-on-error: true
+
+  # Job 2: Security and Vulnerability Scanning
+  security-scan:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    if: always() && needs.build.result == 'success'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📥 Download image artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: 🔍 Advanced security scan with Snyk
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: /tmp/image.tar
+          args: --severity-threshold=high --json-file-output=snyk-results.json
+        continue-on-error: true
+
+      - name: 📊 Upload security scan results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-scan-results
+          path: |
+            trivy-results.sarif
+            snyk-results.json
+
+  # Job 3: Push to Docker Hub
+  push:
+    name: 🚀 Push to Docker Hub
+    runs-on: ubuntu-latest
+    needs: [build, security-scan]
+    if: |
+      always() && 
+      needs.build.result == 'success' &&
+      (
+        github.event_name == 'push' && 
+        (
+          github.ref == 'refs/heads/main' || 
+          github.ref == 'refs/heads/master' || 
+          startsWith(github.ref, 'refs/tags/v')
+        ) ||
+        github.event.inputs.force_push == 'true'
+      )
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 🔍 Extract metadata (for push)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ github.event.inputs.custom_tag }},enable=${{ github.event.inputs.custom_tag != '' }}
+            type=sha,prefix={{branch}}-,suffix=-{{date 'YYYYMMDD'}},format=short
+
+      - name: 🚀 Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE_PATH }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+
+      - name: 📋 Generate image summary
+        run: |
+          echo "## 🐳 Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Image Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository:** ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest:** \`${{ steps.push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🏷️ Tags Published" >> $GITHUB_STEP_SUMMARY
+          IFS=$'\n'
+          for tag in ${{ steps.meta.outputs.tags }}; do
+            echo "- \`$tag\`" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Usage" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Pull the image" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Run the container" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -d -p 8000:8000 \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e DJANGO_SETTINGS_MODULE=messaging_app.settings.production \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e SECRET_KEY=your-secret-key \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e DATABASE_URL=mysql://user:pass@host:port/db \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --name messaging-app \\" >> $GITHUB_STEP_SUMMARY
+          echo "  ${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📊 Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE_NAME }}
+          short-description: "Django-based messaging application with MySQL support"
+          readme-filepath: ./README.md
+        continue-on-error: true
+
+  # Job 4: Deploy Notification and Cleanup
+  notify:
+    name: 📢 Notifications & Cleanup
+    runs-on: ubuntu-latest
+    needs: [build, security-scan, push]
+    if: always()
+
+    steps:
+      - name: 📊 Create deployment summary
+        run: |
+          echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status | Duration |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} | N/A |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | ${{ needs.security-scan.result }} | N/A |" >> $GITHUB_STEP_SUMMARY
+          echo "| Push to Registry | ${{ needs.push.result }} | N/A |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch/Tag:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Event:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🧹 Cleanup artifacts
+        uses: geekyeggo/delete-artifact@v2
+        if: always()
+        with:
+          name: docker-image
+          failOnError: false
+
+      - name: 📧 Send success notification
+        if: needs.push.result == 'success'
+        run: |
+          echo "✅ Docker image successfully built and pushed!"
+          echo "🐳 Image: ${{ env.IMAGE_NAME }}:latest"
+          # Add webhook notification here if needed
+          # curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" -H 'Content-type: application/json' --data '{"text":"✅ New Docker image deployed: ${{ env.IMAGE_NAME }}:latest"}'
+
+      - name: ❌ Send failure notification
+        if: needs.build.result == 'failure' || needs.push.result == 'failure'
+        run: |
+          echo "❌ Docker deployment failed!"
+          echo "Check the workflow logs for details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # Add webhook notification here if needed
+          # curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" -H 'Content-type: application/json' --data '{"text":"❌ Docker deployment failed for ${{ github.repository }}"}'
