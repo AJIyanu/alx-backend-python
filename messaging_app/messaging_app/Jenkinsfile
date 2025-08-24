@@ -1,0 +1,305 @@
+pipeline {
+    agent any
+    
+    environment {
+        // Define environment variables
+        PYTHON_VERSION = '3.9'
+        VIRTUAL_ENV = 'venv'
+        GITHUB_CREDENTIALS_ID = 'github-credentials' // Update this to match your Jenkins credentials ID
+    }
+    
+    options {
+        // Keep builds for 10 days or last 10 builds
+        buildDiscarder(logRotator(daysToKeepStr: '10', numToKeepStr: '10'))
+        
+        // Timeout the build after 30 minutes
+        timeout(time: 30, unit: 'MINUTES')
+        
+        // Skip default checkout
+        skipDefaultCheckout(true)
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    echo "🔄 Checking out code from GitHub..."
+                    
+                    // Checkout code using GitHub credentials
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        doGenerateSubmoduleConfigurations: false,
+                        extensions: [
+                            [$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true],
+                            [$class: 'CheckoutOption', timeout: 20]
+                        ],
+                        submoduleCfg: [],
+                        userRemoteConfigs: [[
+                            credentialsId: "${GITHUB_CREDENTIALS_ID}",
+                            url: 'https://github.com/AJIyanu/alx-backend-python'
+                        ]]
+                    ])
+                    
+                    // Display current commit info
+                    sh '''
+                        echo "📋 Current commit information:"
+                        git log -1 --oneline
+                        git branch -a
+                    '''
+                }
+            }
+        }
+        
+        stage('Setup Environment') {
+            steps {
+                script {
+                    echo "🔧 Setting up Python environment..."
+                    
+                    // Create virtual environment and install dependencies
+                    sh '''
+                        # Remove existing virtual environment if it exists
+                        if [ -d "${VIRTUAL_ENV}" ]; then
+                            rm -rf ${VIRTUAL_ENV}
+                        fi
+                        
+                        # Create new virtual environment
+                        python${PYTHON_VERSION} -m venv ${VIRTUAL_ENV}
+                        
+                        # Activate virtual environment and upgrade pip
+                        . ${VIRTUAL_ENV}/bin/activate
+                        pip install --upgrade pip setuptools wheel
+                        
+                        # Install dependencies
+                        if [ -f "requirements.txt" ]; then
+                            echo "📦 Installing dependencies from requirements.txt..."
+                            pip install -r requirements.txt
+                        else
+                            echo "⚠️  No requirements.txt found, installing basic testing dependencies..."
+                            pip install pytest pytest-html pytest-cov pytest-xdist
+                        fi
+                        
+                        # Install development dependencies if they exist
+                        if [ -f "requirements-dev.txt" ]; then
+                            echo "📦 Installing development dependencies..."
+                            pip install -r requirements-dev.txt
+                        fi
+                        
+                        # Display installed packages
+                        echo "📋 Installed packages:"
+                        pip list
+                    '''
+                }
+            }
+        }
+        
+        stage('Code Quality Checks') {
+            parallel {
+                stage('Linting') {
+                    steps {
+                        script {
+                            echo "🔍 Running code quality checks..."
+                            
+                            sh '''
+                                . ${VIRTUAL_ENV}/bin/activate
+                                
+                                # Install linting tools if not already installed
+                                pip install flake8 pylint black isort || true
+                                
+                                # Create reports directory
+                                mkdir -p reports
+                                
+                                # Run flake8 (style guide enforcement)
+                                echo "Running flake8..."
+                                flake8 . --max-line-length=88 --extend-ignore=E203,W503 --format=html --htmldir=reports/flake8 || true
+                                flake8 . --max-line-length=88 --extend-ignore=E203,W503 --tee --output-file=reports/flake8.txt || true
+                                
+                                # Run pylint (code analysis)
+                                echo "Running pylint..."
+                                find . -name "*.py" -not -path "./venv/*" -not -path "./${VIRTUAL_ENV}/*" | xargs pylint --output-format=json > reports/pylint.json || true
+                                
+                                # Check code formatting with black
+                                echo "Checking code formatting with black..."
+                                black --check --diff . > reports/black-check.txt || true
+                                
+                                # Check import sorting with isort
+                                echo "Checking import sorting with isort..."
+                                isort --check-only --diff . > reports/isort-check.txt || true
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Security Scan') {
+                    steps {
+                        script {
+                            echo "🔒 Running security checks..."
+                            
+                            sh '''
+                                . ${VIRTUAL_ENV}/bin/activate
+                                
+                                # Install security scanning tools
+                                pip install bandit safety || true
+                                
+                                # Run bandit security linter
+                                echo "Running bandit security scan..."
+                                bandit -r . -f json -o reports/bandit.json || true
+                                bandit -r . -f txt -o reports/bandit.txt || true
+                                
+                                # Run safety check for known security vulnerabilities
+                                echo "Running safety check..."
+                                safety check --json --output reports/safety.json || true
+                                safety check --output reports/safety.txt || true
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Run Tests') {
+            steps {
+                script {
+                    echo "🧪 Running tests with pytest..."
+                    
+                    sh '''
+                        . ${VIRTUAL_ENV}/bin/activate
+                        
+                        # Create test reports directory
+                        mkdir -p reports/tests
+                        
+                        # Run pytest with coverage and multiple output formats
+                        pytest \
+                            --verbose \
+                            --tb=short \
+                            --cov=. \
+                            --cov-report=html:reports/coverage \
+                            --cov-report=xml:reports/coverage.xml \
+                            --cov-report=term-missing \
+                            --junit-xml=reports/tests/junit.xml \
+                            --html=reports/tests/report.html \
+                            --self-contained-html \
+                            -n auto \
+                            tests/ || TEST_RESULT=$?
+                        
+                        # Display test summary
+                        echo "📊 Test execution completed"
+                        
+                        # Exit with test result code
+                        exit ${TEST_RESULT:-0}
+                    '''
+                }
+            }
+            post {
+                always {
+                    // Archive test results
+                    junit 'reports/tests/junit.xml'
+                    
+                    // Publish HTML test report
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports/tests',
+                        reportFiles: 'report.html',
+                        reportName: 'Test Report'
+                    ])
+                    
+                    // Publish coverage report
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports/coverage',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report'
+                    ])
+                }
+            }
+        }
+        
+        stage('Generate Reports') {
+            steps {
+                script {
+                    echo "📈 Generating additional reports..."
+                    
+                    sh '''
+                        . ${VIRTUAL_ENV}/bin/activate
+                        
+                        # Create a comprehensive build summary
+                        cat > reports/build-summary.txt << EOF
+MESSAGING APP BUILD SUMMARY
+============================
+Build Number: ${BUILD_NUMBER}
+Build URL: ${BUILD_URL}
+Git Commit: $(git rev-parse HEAD)
+Git Branch: $(git rev-parse --abbrev-ref HEAD)
+Build Date: $(date)
+Build Duration: ${BUILD_DURATION:-"N/A"}
+
+ENVIRONMENT INFO:
+- Python Version: $(python --version)
+- Jenkins Node: ${NODE_NAME}
+- Workspace: ${WORKSPACE}
+
+FILES PROCESSED:
+$(find . -name "*.py" -not -path "./venv/*" -not -path "./${VIRTUAL_ENV}/*" | wc -l) Python files found
+
+REPORTS GENERATED:
+- Test Report: reports/tests/report.html
+- Coverage Report: reports/coverage/index.html
+- JUnit XML: reports/tests/junit.xml
+- Coverage XML: reports/coverage.xml
+
+EOF
+                        
+                        echo "📋 Build summary generated"
+                        cat reports/build-summary.txt
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo "🧹 Cleaning up workspace..."
+            
+            // Archive all reports
+            archiveArtifacts artifacts: 'reports/**/*', fingerprint: true, allowEmptyArchive: true
+            
+            // Clean up virtual environment but keep reports
+            sh '''
+                if [ -d "${VIRTUAL_ENV}" ]; then
+                    rm -rf ${VIRTUAL_ENV}
+                fi
+            '''
+        }
+        
+        success {
+            echo "✅ Pipeline completed successfully!"
+            
+            // Send success notification (uncomment and configure as needed)
+            // emailext (
+            //     subject: "✅ Build Success: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+            //     body: "The build was successful. View details at: ${env.BUILD_URL}",
+            //     to: "developer@yourcompany.com"
+            // )
+        }
+        
+        failure {
+            echo "❌ Pipeline failed!"
+            
+            // Send failure notification (uncomment and configure as needed)
+            // emailext (
+            //     subject: "❌ Build Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+            //     body: "The build failed. View details at: ${env.BUILD_URL}",
+            //     to: "developer@yourcompany.com"
+            // )
+        }
+        
+        unstable {
+            echo "⚠️ Pipeline completed with warnings!"
+        }
+    }
+}
