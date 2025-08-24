@@ -1,11 +1,38 @@
 pipeline {
     agent any
     
+    parameters {
+        booleanParam(
+            name: 'FORCE_DOCKER_BUILD',
+            defaultValue: false,
+            description: 'Force Docker image build regardless of branch'
+        )
+        booleanParam(
+            name: 'FORCE_DOCKER_PUSH',
+            defaultValue: false,
+            description: 'Force Docker image push regardless of branch'
+        )
+        choice(
+            name: 'DOCKER_TAG_STRATEGY',
+            choices: ['build-number', 'git-commit', 'timestamp'],
+            description: 'Strategy for Docker image tagging'
+        )
+    }
+    
     environment {
         // Define environment variables
         PYTHON_VERSION = '3.9'
         VIRTUAL_ENV = 'venv'
         GITHUB_CREDENTIALS_ID = 'github-credentials' // Update this to match your Jenkins credentials ID
+        
+        // Docker configuration
+        DOCKER_REGISTRY = 'docker.io' 
+        DOCKER_REPOSITORY = 'AJIyanu/alx-backend-python' 
+        DOCKER_CREDENTIALS_ID = 'docker-hub-credentials' 
+        
+        // Image versioning
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        LATEST_TAG = 'latest'
     }
     
     options {
@@ -28,7 +55,7 @@ pipeline {
                     // Checkout code using GitHub credentials
                     checkout([
                         $class: 'GitSCM',
-                        branches: [[name: '*/main']],
+                        branches: [[name: '*/main']], // Change to your default branch if different
                         doGenerateSubmoduleConfigurations: false,
                         extensions: [
                             [$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true],
@@ -37,7 +64,7 @@ pipeline {
                         submoduleCfg: [],
                         userRemoteConfigs: [[
                             credentialsId: "${GITHUB_CREDENTIALS_ID}",
-                            url: 'https://github.com/AJIyanu/alx-backend-python'
+                            url: 'https://github.com/AJIyanu/alx-backend-python' // Update with your repo URL
                         ]]
                     ])
                     
@@ -68,12 +95,12 @@ pipeline {
                         
                         # Activate virtual environment and upgrade pip
                         . ${VIRTUAL_ENV}/bin/activate
-                        pip install --upgrade pip setuptools wheel
+                        pip3 install --upgrade pip setuptools wheel
                         
                         # Install dependencies
                         if [ -f "requirements.txt" ]; then
                             echo "📦 Installing dependencies from requirements.txt..."
-                            pip install -r requirements.txt
+                            pip3 install -r messaging_app/requirements.txt
                         else
                             echo "⚠️  No requirements.txt found, installing basic testing dependencies..."
                             pip install pytest pytest-html pytest-cov pytest-xdist
@@ -82,7 +109,7 @@ pipeline {
                         # Install development dependencies if they exist
                         if [ -f "requirements-dev.txt" ]; then
                             echo "📦 Installing development dependencies..."
-                            pip install -r requirements-dev.txt
+                            pip3 install -r messaging_app/requirements.txt
                         fi
                         
                         # Display installed packages
@@ -255,6 +282,237 @@ EOF
                         
                         echo "📋 Build summary generated"
                         cat reports/build-summary.txt
+                    '''
+                }
+            }
+        }
+        
+        stage('Build Docker Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'develop'
+                    expression { return params.FORCE_DOCKER_BUILD == true }
+                }
+            }
+            steps {
+                script {
+                    echo "🐳 Building Docker image..."
+                    
+                    // Create Dockerfile if it doesn't exist
+                    sh '''
+                        if [ ! -f "Dockerfile" ]; then
+                            echo "⚠️  No Dockerfile found. Creating a default Dockerfile..."
+                            cat > Dockerfile << 'DOCKERFILE_EOF'
+# Use Python slim image
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install system dependencies
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends \\
+        gcc \\
+        libc6-dev \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements*.txt ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \\
+    && pip install --no-cache-dir -r requirements.txt \\
+    && if [ -f "requirements-prod.txt" ]; then pip install --no-cache-dir -r requirements-prod.txt; fi
+
+# Copy application code
+COPY . .
+
+# Create non-root user for security
+RUN groupadd -r appuser && useradd -r -g appuser appuser \\
+    && chown -R appuser:appuser /app
+USER appuser
+
+# Expose port (update based on your app)
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \\
+    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+
+# Default command (update based on your app's entry point)
+CMD ["python", "-m", "gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "app:app"]
+DOCKERFILE_EOF
+                        else
+                            echo "✅ Dockerfile found"
+                        fi
+                    '''
+                    
+                    // Build the Docker image
+                    def dockerImage = docker.build(
+                        "${DOCKER_REPOSITORY}:${IMAGE_TAG}",
+                        "--no-cache --pull --label 'build.number=${BUILD_NUMBER}' --label 'build.url=${BUILD_URL}' --label 'git.commit=${GIT_COMMIT}' --label 'git.branch=${GIT_BRANCH}' ."
+                    )
+                    
+                    // Tag the image with latest
+                    dockerImage.tag("${LATEST_TAG}")
+                    
+                    // Store image for later use
+                    env.DOCKER_IMAGE_ID = dockerImage.id
+                    
+                    echo "✅ Docker image built successfully: ${DOCKER_REPOSITORY}:${IMAGE_TAG}"
+                }
+            }
+            post {
+                always {
+                    // Clean up dangling images to save space
+                    sh 'docker image prune -f || true'
+                }
+            }
+        }
+        
+        stage('Test Docker Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'develop'
+                    expression { return params.FORCE_DOCKER_BUILD == true }
+                }
+            }
+            steps {
+                script {
+                    echo "🧪 Testing Docker image..."
+                    
+                    try {
+                        // Run basic tests on the Docker image
+                        sh '''
+                            echo "Testing Docker image basic functionality..."
+                            
+                            # Test image can be instantiated
+                            CONTAINER_ID=$(docker run -d --name test-container-${BUILD_NUMBER} ${DOCKER_REPOSITORY}:${IMAGE_TAG})
+                            echo "Container started: $CONTAINER_ID"
+                            
+                            # Wait for container to be ready
+                            sleep 10
+                            
+                            # Check if container is running
+                            if docker ps | grep -q test-container-${BUILD_NUMBER}; then
+                                echo "✅ Container is running successfully"
+                                
+                                # Run basic health checks
+                                docker exec test-container-${BUILD_NUMBER} python --version
+                                docker exec test-container-${BUILD_NUMBER} pip list
+                                
+                                # Check if app dependencies are installed (customize based on your app)
+                                docker exec test-container-${BUILD_NUMBER} python -c "import flask" || echo "⚠️  Flask not found"
+                                docker exec test-container-${BUILD_NUMBER} python -c "import requests" || echo "⚠️  Requests not found"
+                            else
+                                echo "❌ Container failed to start"
+                                docker logs test-container-${BUILD_NUMBER}
+                                exit 1
+                            fi
+                        '''
+                        
+                        // Test image security
+                        sh '''
+                            echo "Running security scan on Docker image..."
+                            
+                            # Install and run Trivy if available (optional)
+                            if command -v trivy &> /dev/null; then
+                                echo "Running Trivy security scan..."
+                                trivy image --format json --output reports/docker-security.json ${DOCKER_REPOSITORY}:${IMAGE_TAG} || true
+                                trivy image --severity HIGH,CRITICAL ${DOCKER_REPOSITORY}:${IMAGE_TAG} || true
+                            else
+                                echo "⚠️  Trivy not available, skipping security scan"
+                            fi
+                        '''
+                        
+                    } finally {
+                        // Always clean up test containers
+                        sh '''
+                            echo "Cleaning up test containers..."
+                            docker stop test-container-${BUILD_NUMBER} || true
+                            docker rm test-container-${BUILD_NUMBER} || true
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Push Docker Image') {
+            when {
+                allOf {
+                    anyOf {
+                        branch 'main'
+                        branch 'master'
+                        expression { return params.FORCE_DOCKER_PUSH == true }
+                    }
+                    expression { return currentBuild.result != 'FAILURE' }
+                }
+            }
+            steps {
+                script {
+                    echo "🚀 Pushing Docker image to registry..."
+                    
+                    // Login to Docker registry and push
+                    docker.withRegistry("https://${DOCKER_REGISTRY}", "${DOCKER_CREDENTIALS_ID}") {
+                        
+                        // Push versioned image
+                        def dockerImage = docker.image("${DOCKER_REPOSITORY}:${IMAGE_TAG}")
+                        dockerImage.push("${IMAGE_TAG}")
+                        dockerImage.push("${LATEST_TAG}")
+                        
+                        // Add additional tags if needed
+                        if (env.GIT_BRANCH == 'main' || env.GIT_BRANCH == 'master') {
+                            dockerImage.push("stable")
+                        }
+                        
+                        // Create manifest for multi-arch if needed (uncomment if required)
+                        // sh """
+                        //     docker manifest create ${DOCKER_REPOSITORY}:${IMAGE_TAG} \\
+                        //         ${DOCKER_REPOSITORY}:${IMAGE_TAG}-amd64 \\
+                        //         ${DOCKER_REPOSITORY}:${IMAGE_TAG}-arm64
+                        //     docker manifest push ${DOCKER_REPOSITORY}:${IMAGE_TAG}
+                        // """
+                        
+                        echo "✅ Docker image pushed successfully!"
+                        echo "📦 Image: ${DOCKER_REGISTRY}/${DOCKER_REPOSITORY}:${IMAGE_TAG}"
+                        echo "📦 Image: ${DOCKER_REGISTRY}/${DOCKER_REPOSITORY}:${LATEST_TAG}"
+                    }
+                    
+                    // Update build summary with Docker info
+                    sh '''
+                        cat >> reports/build-summary.txt << EOF
+
+DOCKER IMAGE INFO:
+- Registry: ${DOCKER_REGISTRY}
+- Repository: ${DOCKER_REPOSITORY}
+- Tags: ${IMAGE_TAG}, ${LATEST_TAG}
+- Image ID: ${DOCKER_IMAGE_ID}
+- Push Status: SUCCESS
+
+DOCKER COMMANDS TO USE IMAGE:
+docker pull ${DOCKER_REGISTRY}/${DOCKER_REPOSITORY}:${IMAGE_TAG}
+docker run -d -p 8000:8000 --name messaging-app ${DOCKER_REGISTRY}/${DOCKER_REPOSITORY}:${IMAGE_TAG}
+
+EOF
+                    '''
+                }
+            }
+            post {
+                always {
+                    // Clean up local images after push to save space
+                    sh '''
+                        echo "Cleaning up local Docker images..."
+                        docker rmi ${DOCKER_REPOSITORY}:${IMAGE_TAG} || true
+                        docker rmi ${DOCKER_REPOSITORY}:${LATEST_TAG} || true
+                        docker image prune -f || true
                     '''
                 }
             }
